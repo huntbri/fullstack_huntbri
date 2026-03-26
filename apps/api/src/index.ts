@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import express, { Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import fetch from "node-fetch";
 
 dotenv.config();
 
@@ -200,24 +201,27 @@ app.post("/api/auth/signup", async (request, response) => {
     return;
   }
 
-  if (data.user?.id) {
-    const userError = await upsertUserRole(data.user.id, "member");
-    if (userError) {
-      response.status(500).json({
-        error: "Account created but user role could not be saved.",
-        details: userError.message
-      });
-      return;
-    }
-  }
+  // Assign admin if email ends with @admin.email, else member
+const requestedRole: UserRole = parsed.data.email.endsWith("@admin.email") ? "admin" : "member";
 
-  response.status(201).json({
-    message:
-      "Account created. Check your email if confirmation is required by your Supabase auth settings.",
-    userId: data.user?.id ?? null,
-    accessToken: data.session?.access_token ?? null,
-    role: "member" as UserRole
-  });
+if (data.user?.id) {
+  const userError = await upsertUserRole(data.user.id, requestedRole);
+  if (userError) {
+    response.status(500).json({
+      error: "Account created but user role could not be saved.",
+      details: userError.message
+    });
+    return;
+  }
+}
+
+response.status(201).json({
+  message:
+    "Account created. Check your email if confirmation is required by your Supabase auth settings.",
+  userId: data.user?.id ?? null,
+  accessToken: data.session?.access_token ?? null,
+  role: requestedRole
+});
 });
 
 app.post("/api/auth/login", async (request, response) => {
@@ -281,7 +285,14 @@ app.get("/api/admin/classes", async (request, response) => {
     return;
   }
 
-  response.json(data ?? []);
+  // Add canEdit: true for each class (for admin UI)
+const responsePayload = (data ?? []).map((item) => ({
+  ...item,
+  canEdit: true,
+  canViewRegistrations: true
+}));
+
+  response.json(responsePayload);
 });
 
 app.post("/api/admin/classes", async (request, response) => {
@@ -376,6 +387,60 @@ app.get("/api/member/classes", async (request, response) => {
   response.json(responsePayload);
 });
 
+// Edit a class (admin only)
+app.patch("/api/admin/classes/:id", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const classId = request.params.id;
+  const parsed = createClassSchema.partial().safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: "Invalid class update payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const updateFields: any = {};
+  if (parsed.data.title !== undefined) updateFields.title = parsed.data.title;
+  if (parsed.data.description !== undefined) updateFields.description = parsed.data.description;
+  if (parsed.data.instructorName !== undefined) updateFields.instructor_name = parsed.data.instructorName;
+  if (parsed.data.location !== undefined) updateFields.location = parsed.data.location;
+  if (parsed.data.startsAt !== undefined) updateFields.starts_at = new Date(parsed.data.startsAt).toISOString();
+  if (parsed.data.capacity !== undefined) updateFields.capacity = parsed.data.capacity;
+
+  const { data, error } = await dbClient
+    .from("community_classes")
+    .update(updateFields)
+    .eq("id", classId)
+    .select()
+    .single();
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json(data);
+});
+
+// View registrations for a class (admin only)
+app.get("/api/admin/classes/:id/registrations", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const classId = request.params.id;
+  const { data, error } = await dbClient
+    .from("class_registrations")
+    .select("id, member_id")
+    .eq("class_id", classId);
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json(data ?? []);
+});
+
 app.post("/api/member/registrations", async (request, response) => {
   const user = await requireUser(request, response, ["member"]);
   if (!user) {
@@ -447,6 +512,107 @@ app.post("/api/member/registrations", async (request, response) => {
   }
 
   response.status(201).json({ message: "Registration successful." } satisfies AuthResponse);
+});
+
+app.delete("/api/member/registrations", async (request, response) => {
+  const user = await requireUser(request, response, ["member"]);
+  if (!user) {
+    return;
+  }
+
+  const parsed = registerSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({ error: "Invalid registration payload" });
+    return;
+  }
+
+  const { data: existingRegistration, error: existingRegistrationError } = await dbClient
+    .from("class_registrations")
+    .select("id")
+    .eq("class_id", parsed.data.classId)
+    .eq("member_id", user.id)
+    .maybeSingle();
+
+  if (existingRegistrationError) {
+    response.status(500).json({ error: existingRegistrationError.message });
+    return;
+  }
+
+  if (!existingRegistration) {
+    response.status(404).json({ error: "Registration not found." });
+    return;
+  }
+
+  const { error: deleteError } = await dbClient
+    .from("class_registrations")
+    .delete()
+    .eq("class_id", parsed.data.classId)
+    .eq("member_id", user.id);
+
+  if (deleteError) {
+    response.status(500).json({ error: deleteError.message });
+    return;
+  }
+
+  response.json({ message: "Unregistered successfully." });
+});
+
+type GroqResponse = {
+  choices: Array<{
+    message: {
+      content: string;
+    };
+  }>;
+};
+
+app.post("/api/groq", async (request, response) => {
+  const { question, model = "llama-3.1-8b-instant" } = request.body || {};
+  const apiKey = process.env.GROQ_API_KEY;
+
+  if (!apiKey) {
+    response.status(500).json({ error: "GROQ_API_KEY not set in environment." });
+    return;
+  }
+
+  if (!question || typeof question !== "string") {
+    response.status(400).json({ error: "Missing or invalid 'question' in request body." });
+    return;
+  }
+
+  try {
+    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: question }
+        ]
+      })
+    });
+
+    if (!groqRes.ok) {
+      const errorText = await groqRes.text();
+      response.status(groqRes.status).json({ error: errorText });
+      return;
+    }
+
+    const data = (await groqRes.json()) as GroqResponse;
+    const answer = data.choices?.[0]?.message?.content ?? "No answer returned.";
+
+    response.json({ answer });
+  } catch (err: unknown) {
+    const details = err instanceof Error ? err.message : String(err);
+    response.status(500).json({
+      error: "Failed to contact Groq API.",
+      details
+    });
+  }
 });
 
 app.listen(port, () => {

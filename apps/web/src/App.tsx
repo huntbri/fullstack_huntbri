@@ -13,6 +13,8 @@ type CommunityClass = {
   capacity: number;
   created_at: string;
   created_by: string;
+  canEdit?: boolean; // add this if you use canEdit
+  canViewRegistrations?: boolean; // add this for the button
 };
 
 type MemberClass = CommunityClass & {
@@ -75,8 +77,44 @@ export default function App() {
   const [startsAt, setStartsAt] = useState("");
   const [capacity, setCapacity] = useState("20");
   const [createLoading, setCreateLoading] = useState(false);
+  const [registrations, setRegistrations] = useState<Record<string, any[]>>({});
+  const [loadingRegistrations, setLoadingRegistrations] = useState<Record<string, boolean>>({});
 
   const [registeringClassId, setRegisteringClassId] = useState<string | null>(null);
+
+  // Groq chat state
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<Array<{ role: string; content: string }>>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState("");
+
+  async function handleGroqChatSend(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+  setChatError("");
+  if (!chatInput.trim()) return;
+  const userMessage = { role: "user", content: chatInput };
+  setChatMessages((prev) => [...prev, userMessage]);
+  setChatInput("");
+  setChatLoading(true);
+  try {
+    // Call your backend API, not Groq directly
+    const response = await fetch(apiUrl("/api/groq"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ question: userMessage.content })
+    });
+    if (!response.ok) throw new Error("Groq API error");
+    const data = await response.json();
+    const groqReply = data.answer || "(No reply)";
+    setChatMessages((prev) => [...prev, { role: "groq", content: groqReply }]);
+  } catch (err) {
+    setChatError("Could not reach Groq chat.");
+  } finally {
+    setChatLoading(false);
+  }
+}
 
   const dashboardTitle = useMemo(() => {
     if (!currentRole) {
@@ -120,6 +158,7 @@ export default function App() {
         const errorData = data as AuthResponse;
         throw new Error(errorData.error ?? "Could not load classes.");
       }
+      console.log("[loadMemberClasses] API returned:", data);
 
       setMemberClasses(data as MemberClass[]);
     } finally {
@@ -175,8 +214,13 @@ export default function App() {
 
       setAccessToken(data.accessToken);
       setCurrentRole(data.role);
-      setStatus(data.message ?? "Authenticated.");
-      await loadDashboard(data.role, data.accessToken);
+      // Only show status if not 'Login successful'
+      if (data.message && data.message !== "Login successful") {
+        setStatus(data.message);
+      } else {
+        setStatus("");
+      }
+await loadDashboard(data.role, data.accessToken);
     } catch (error) {
       if (error instanceof Error) {
         setStatus(error.message);
@@ -254,6 +298,22 @@ export default function App() {
     }
   }
 
+  async function handleViewRegistrations(classId: string) {
+  if (!accessToken) return;
+  setLoadingRegistrations((prev) => ({ ...prev, [classId]: true }));
+  try {
+    const response = await fetch(apiUrl(`/api/admin/classes/${classId}/registrations`), {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const data = await parseApiJson<any[]>(response);
+    setRegistrations((prev) => ({ ...prev, [classId]: data }));
+  } catch (err) {
+    setRegistrations((prev) => ({ ...prev, [classId]: [{ id: 'error', member_id: 'Error loading registrations' }] }));
+  } finally {
+    setLoadingRegistrations((prev) => ({ ...prev, [classId]: false }));
+  }
+}
+
   async function handleRegister(classId: string) {
     if (!accessToken || currentRole !== "member") {
       setStatus("Only members can register for classes.");
@@ -292,6 +352,44 @@ export default function App() {
     }
   }
 
+  async function handleUnregister(classId: string) {
+  if (!accessToken || currentRole !== "member") {
+    setStatus("Only members can unregister from classes.");
+    return;
+  }
+
+  setRegisteringClassId(classId);
+  setStatus("");
+
+  try {
+    const response = await fetch(apiUrl("/api/member/registrations"), {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ classId })
+    });
+
+    const data = await parseApiJson<AuthResponse>(response);
+    if (!response.ok) {
+      setStatus(data.error ?? "Unregistration failed.");
+      return;
+    }
+
+    setStatus(data.message ?? "Unregistered successfully.");
+    await loadMemberClasses(accessToken);
+  } catch (error) {
+    if (error instanceof Error) {
+      setStatus(error.message);
+      return;
+    }
+    setStatus("Could not complete unregistration.");
+  } finally {
+    setRegisteringClassId(null);
+  }
+}
+
   function logout() {
     setAccessToken(null);
     setCurrentRole(null);
@@ -303,6 +401,40 @@ export default function App() {
   return (
     <main className="page">
       <section className="panel">
+        {accessToken && (
+  <section className="stack chat-section">
+    <h2>Chat with Groq</h2>
+    <div className="chat-box" style={{border: '1px solid #ccc', borderRadius: 8, padding: 16, maxHeight: 300, overflowY: 'auto', background: '#fafbfc', marginBottom: 8}}>
+      {chatMessages.length === 0 ? (
+        <p style={{color: '#888'}}>No messages yet. Say hello!</p>
+      ) : (
+        <ul style={{listStyle: 'none', padding: 0, margin: 0}}>
+          {chatMessages.map((msg, idx) => (
+            <li key={idx} style={{marginBottom: 8, textAlign: msg.role === 'user' ? 'right' : 'left'}}>
+              <span style={{fontWeight: msg.role === 'user' ? 'bold' : 'normal'}}>{msg.role === 'user' ? 'You' : 'Groq'}: </span>
+              <span>{msg.content}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+    <form onSubmit={handleGroqChatSend} style={{display: 'flex', gap: 8}}>
+      <input
+        type="text"
+        placeholder="Type your message..."
+        value={chatInput}
+        onChange={e => setChatInput(e.target.value)}
+        disabled={chatLoading}
+        style={{flex: 1}}
+        required
+      />
+      <button type="submit" disabled={chatLoading || !chatInput.trim()}>
+        {chatLoading ? 'Sending...' : 'Send'}
+      </button>
+    </form>
+    {chatError && <p className="status" style={{color: 'red'}}>{chatError}</p>}
+  </section>
+)}
         <header className="panel-header">
           <div>
             <h1>{dashboardTitle}</h1>
@@ -434,6 +566,23 @@ export default function App() {
                       <p>
                         <strong>Capacity:</strong> {item.capacity}
                       </p>
+                      {('canViewRegistrations' in item) && item.canViewRegistrations && (
+                      <button type="button" onClick={() => handleViewRegistrations(item.id)}>
+                        View Registrations
+                      </button>
+                    )}
+                    {loadingRegistrations[item.id] && <div>Loading registrations...</div>}
+                    {registrations[item.id] && (
+                      <ul style={{ marginTop: 8 }}>
+                        {registrations[item.id].length === 0 ? (
+                          <li>No registrations yet.</li>
+                        ) : (
+                          registrations[item.id].map((reg) => (
+                            <li key={reg.id}>Member ID: {reg.member_id}</li>
+                          ))
+                        )}
+                      </ul>
+                    )}
                     </li>
                   ))}
                 </ul>
@@ -467,19 +616,27 @@ export default function App() {
                       <p>
                         <strong>Registered:</strong> {item.registrationCount}/{item.capacity}
                       </p>
-                      <button
-                        type="button"
-                        disabled={item.isRegistered || isFull || registeringClassId === item.id}
-                        onClick={() => handleRegister(item.id)}
-                      >
-                        {item.isRegistered
-                          ? "Registered"
-                          : isFull
-                            ? "Class Full"
-                            : registeringClassId === item.id
-                              ? "Registering..."
-                              : "Register"}
-                      </button>
+                      {item.isRegistered ? (
+  <button
+    type="button"
+    disabled={registeringClassId === item.id}
+    onClick={() => handleUnregister(item.id)}
+  >
+    {registeringClassId === item.id ? "Unregistering..." : "Unregister"}
+  </button>
+) : (
+  <button
+    type="button"
+    disabled={isFull || registeringClassId === item.id}
+    onClick={() => handleRegister(item.id)}
+  >
+    {isFull
+      ? "Class Full"
+      : registeringClassId === item.id
+        ? "Registering..."
+        : "Register"}
+  </button>
+)}
                     </li>
                   );
                 })}
@@ -489,6 +646,9 @@ export default function App() {
         )}
 
         {status && <p className="status">{status}</p>}
+
+        {/* Groq Chat Section */}
+
       </section>
     </main>
   );

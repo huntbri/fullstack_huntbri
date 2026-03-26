@@ -200,4 +200,134 @@ begin
       20
     );
   end if;
+
+  if not exists (
+    select 1
+    from public.community_classes
+    where title = 'Beginner Watercolor Workshop'
+      and starts_at = '2026-04-10T22:00:00Z'::timestamptz
+  ) then
+    insert into public.community_classes (
+      created_by,
+      title,
+      description,
+      instructor_name,
+      location,
+      starts_at,
+      capacity
+    )
+    values (
+      seed_user_id,
+      'Beginner Watercolor Workshop',
+      'Learn basic watercolor techniques and create your own landscape painting.',
+      'Sophie Lin',
+      'Westside Art Studio',
+      '2026-04-10T22:00:00Z'::timestamptz,
+      18
+    );
+  end if;
+
+  if not exists (
+    select 1
+    from public.community_classes
+    where title = 'Family Board Game Night'
+      and starts_at = '2026-04-15T23:00:00Z'::timestamptz
+  ) then
+    insert into public.community_classes (
+      created_by,
+      title,
+      description,
+      instructor_name,
+      location,
+      starts_at,
+      capacity
+    )
+    values (
+      seed_user_id,
+      'Family Board Game Night',
+      'Bring your family and enjoy classic and new board games together.',
+      'Jordan Lee',
+      'Community Hall',
+      '2026-04-15T23:00:00Z'::timestamptz,
+      30
+    );
+  end if;
+
+  if not exists (
+    select 1
+    from public.community_classes
+    where title = 'Spring Nature Walk'
+      and starts_at = '2026-04-20T18:00:00Z'::timestamptz
+  ) then
+    insert into public.community_classes (
+      created_by,
+      title,
+      description,
+      instructor_name,
+      location,
+      starts_at,
+      capacity
+    )
+    values (
+      seed_user_id,
+      'Spring Nature Walk',
+      'Join a guided walk to discover local plants and wildlife.',
+      'Maria Gomez',
+      'Riverside Park Entrance',
+      '2026-04-20T18:00:00Z'::timestamptz,
+      25
+    );
+  end if;
+
+  if not exists (
+    select 1
+    from public.community_classes
+    where title = 'Intro to Coding for Teens'
+      and starts_at = '2026-04-25T21:00:00Z'::timestamptz
+  ) then
+    insert into public.community_classes (
+      created_by,
+      title,
+      description,
+      instructor_name,
+      location,
+      starts_at,
+      capacity
+    )
+    values (
+      seed_user_id,
+      'Intro to Coding for Teens',
+      'A hands-on introduction to programming using fun projects.',
+      'Alex Patel',
+      'Tech Lab',
+      '2026-04-25T21:00:00Z'::timestamptz,
+      20
+    );
+  end if;
+
+  if not exists (
+    select 1
+    from public.community_classes
+    where title = 'Community Choir Rehearsal'
+      and starts_at = '2026-05-01T19:00:00Z'::timestamptz
+  ) then
+    insert into public.community_classes (
+      created_by,
+      title,
+      description,
+      instructor_name,
+      location,
+      starts_at,
+      capacity
+    )
+    values (
+      seed_user_id,
+      'Community Choir Rehearsal',
+      'Sing with neighbors and prepare for the spring concert.',
+      'Linda Chen',
+      'Music Room',
+      '2026-05-01T19:00:00Z'::timestamptz,
+      40
+    );
+  end if;
 end $$;
